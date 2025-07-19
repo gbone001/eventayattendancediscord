@@ -1,0 +1,164 @@
+Absolutely, Gareth — here’s a clean, extensible version of your Discord bot that:
+
+Detects Apollo event embeds 🗓️
+
+Tracks RSVP reactions ✅❌🤔
+
+Stores responses in PostgreSQL 🛢️
+
+Supports commands for reporting 📊
+
+Ready to automate with Airflow and back up with Elastio 🔄🛡️
+
+📦 Project Structure
+apollo_bot/
+├── bot.py              # Full bot logic
+├── config.py           # Token & DB config
+├── db.py               # PostgreSQL setup
+├── attendance.py       # Command logic
+├── export.py           # CSV generation
+└── requirements.txt    # Dependencies
+🧠 config.py
+python
+BOT_TOKEN = "your_discord_token"
+DB_CONFIG = {
+    "host": "localhost",
+    "dbname": "apollo_db",
+    "user": "apollo_user",
+    "password": "secure_password"
+}
+🗃️ db.py
+python
+import psycopg2
+from config import DB_CONFIG
+
+def get_conn():
+    return psycopg2.connect(**DB_CONFIG)
+
+def log_event(event_id, name, message_id, timestamp):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO events (event_id, name, message_id, timestamp)
+        VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING;
+    """, (event_id, name, message_id, timestamp))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def log_response(event_id, username, user_id, status, responded_at):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO responses (event_id, username, user_id, status, responded_at)
+        VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING;
+    """, (event_id, username, user_id, status, responded_at))
+    conn.commit()
+    cur.close()
+    conn.close()
+🤖 bot.py
+python
+import discord
+from discord.ext import commands
+from config import BOT_TOKEN
+from db import log_event, log_response
+from datetime import datetime
+import attendance
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+intents.reactions = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+
+@bot.event
+async def on_message(message):
+    if message.author.name == "Apollo" and message.embeds:
+        embed = message.embeds[0]
+        event_id = f"{message.id}"
+        event_name = embed.title
+        log_event(event_id, event_name, message.id, datetime.utcnow())
+    await bot.process_commands(message)
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    event_id = str(payload.message_id)
+    user = bot.get_user(payload.user_id)
+    emoji_map = {"✅": "Going", "❌": "Not Going", "🤔": "Tentative"}
+    status = emoji_map.get(payload.emoji.name)
+    if user and status:
+        log_response(event_id, user.name, user.id, status, datetime.utcnow())
+
+# Load attendance commands
+attendance.setup(bot)
+
+bot.run(BOT_TOKEN)
+📊 attendance.py (Commands)
+python
+import csv
+from collections import defaultdict
+from discord import Embed
+from db import get_conn
+
+def setup(bot):
+    @bot.command()
+    async def attendance(ctx, event_id: str):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT username, status FROM responses WHERE event_id = %s;
+        """, (event_id,))
+        rows = cur.fetchall()
+        cur.execute("SELECT name FROM events WHERE event_id = %s;", (event_id,))
+        event = cur.fetchone()
+        conn.close()
+
+        if not event:
+            await ctx.send("❗ Event not found.")
+            return
+
+        stats = defaultdict(list)
+        for user, status in rows:
+            stats[status].append(user)
+
+        all_members = [m.name for m in ctx.guild.members if not m.bot]
+        responded = {user for user, _ in rows}
+        not_responded = [u for u in all_members if u not in responded]
+
+        embed = Embed(title=f"📋 {event[0]} Attendance", color=0x00b2ff)
+        embed.add_field(name="✅ Going", value="\n".join(stats["Going"]) or "None", inline=False)
+        embed.add_field(name="❌ Not Going", value="\n".join(stats["Not Going"]) or "None", inline=False)
+        embed.add_field(name="🤔 Tentative", value="\n".join(stats["Tentative"]) or "None", inline=False)
+        embed.add_field(name="🤷 No Response", value="\n".join(not_responded) or "None", inline=False)
+        await ctx.send(embed=embed)
+
+    @bot.command()
+    async def who_is_going(ctx, event_id: str):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT username FROM responses WHERE event_id = %s AND status = 'Going';
+        """, (event_id,))
+        users = [row[0] for row in cur.fetchall()]
+        cur.execute("SELECT name FROM events WHERE event_id = %s;", (event_id,))
+        event = cur.fetchone()
+        conn.close()
+
+        if not event:
+            await ctx.send("❗ Event not found.")
+            return
+
+        embed = Embed(
+            title=f"✅ Attendees for {event[0]}",
+            description="\n".join(users) or "No confirmed attendees yet.",
+            color=0x43b581
+        )
+        await ctx.send(embed=embed)
+📄 requirements.txt
+discord.py
+psycopg2
