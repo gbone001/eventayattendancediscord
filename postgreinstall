@@ -1,0 +1,72 @@
+🧱 1. Install PostgreSQL (Ubuntu/Debian)
+bash
+sudo apt update
+sudo apt install postgresql postgresql-contrib
+Start and enable the service:
+
+bash
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+Switch to the postgres user to configure your DB:
+
+bash
+sudo -i -u postgres
+🗃️ 2. Create User and Database
+From the postgres shell:
+
+bash
+createuser apollo_user --pwprompt  # Enter secure password
+createdb apollo_db
+psql
+Then inside psql:
+
+sql
+GRANT ALL PRIVILEGES ON DATABASE apollo_db TO apollo_user;
+ALTER USER apollo_user WITH ENCRYPTED PASSWORD 'your_secure_password';
+Exit with \q.
+
+🧬 3. Define Schema for Events and Responses
+Connect to your DB:
+
+bash
+psql -U apollo_user -d apollo_db
+Then run:
+
+sql
+CREATE TABLE events (
+    id SERIAL PRIMARY KEY,
+    event_id TEXT UNIQUE,
+    name TEXT,
+    message_id BIGINT,
+    timestamp TIMESTAMP
+);
+
+CREATE TABLE responses (
+    id SERIAL PRIMARY KEY,
+    event_id TEXT REFERENCES events(event_id),
+    username TEXT,
+    user_id BIGINT,
+    status TEXT CHECK (status IN ('Going', 'Not Going', 'Tentative')),
+    responded_at TIMESTAMP
+);
+Optional indexes:
+
+sql
+CREATE INDEX idx_event_id ON responses(event_id);
+CREATE INDEX idx_user_id ON responses(user_id);
+Exit with \q.
+
+🛡️ 4. (Optional) Enable Remote Access
+Edit the config:
+
+bash
+sudo nano /etc/postgresql/*/main/pg_hba.conf
+Add:
+
+host    apollo_db    apollo_user    0.0.0.0/0    md5
+Then update:
+
+bash
+sudo nano /etc/postgresql/*/main/postgresql.conf
+# Set listen_addresses = '*'
+sudo systemctl restart postgresql
